@@ -62,9 +62,9 @@ func (l *Lexer) NextToken() Token {
 		return l.parseString()
 	default:
 		if unicode.IsDigit(char) || char == '-' {
-			return l.parseNumber(char)
+			return l.parseNumber()
 		}
-		return l.parseKeyword(char)
+		return l.parseKeyword()
 	}
 }
 
@@ -77,7 +77,7 @@ func (l *Lexer) parseString() Token {
 			break
 		}
 		if char == 0 {
-			panic("Unterminated string")
+			return Token{Invalid, "Unterminated string"}
 		}
 		// Handle escape sequences
 		if char == '\\' {
@@ -88,7 +88,7 @@ func (l *Lexer) parseString() Token {
 }
 
 // parseNumber parses a JSON number token
-func (l *Lexer) parseNumber(firstChar rune) Token {
+func (l *Lexer) parseNumber() Token {
 	startPos := l.Pos - 1
 	dotSeen := false
 	expSeen := false
@@ -116,7 +116,7 @@ func (l *Lexer) parseNumber(firstChar rune) Token {
 }
 
 // parseKeyword parses JSON keywords (true, false, null)
-func (l *Lexer) parseKeyword(firstChar rune) Token {
+func (l *Lexer) parseKeyword() Token {
 	startPos := l.Pos - 1
 	for unicode.IsLetter(l.Peek()) {
 		l.Next()
