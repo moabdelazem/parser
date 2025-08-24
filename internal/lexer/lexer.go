@@ -1,51 +1,63 @@
 package lexer
 
-import "unicode"
-
 // Lexer tokenizes JSON input
 type Lexer struct {
-	Input []rune
-	Pos   int
+	Input  string // Use string instead of []rune for better performance
+	Pos    int
+	Length int
 }
 
 // NewLexer creates a new lexer instance
 func NewLexer(text string) *Lexer {
 	return &Lexer{
-		Input: []rune(text),
-		Pos:   0,
+		Input:  text,
+		Pos:    0,
+		Length: len(text),
 	}
 }
 
 // Peek returns the current character without advancing the position
-func (l *Lexer) Peek() rune {
-	if l.Pos >= len(l.Input) {
+func (l *Lexer) Peek() byte {
+	if l.Pos >= l.Length {
 		return 0
 	}
 	return l.Input[l.Pos]
 }
 
 // Next returns the current character and advances the position
-func (l *Lexer) Next() rune {
-	char := l.Peek()
+func (l *Lexer) Next() byte {
+	if l.Pos >= l.Length {
+		return 0
+	}
+	char := l.Input[l.Pos]
 	l.Pos++
 	return char
 }
 
-// SkipWhiteSpaces skips whitespace characters
+// SkipWhiteSpaces skips whitespace characters - optimized version
 func (l *Lexer) SkipWhiteSpaces() {
-	for unicode.IsSpace(l.Peek()) {
-		l.Next()
+	for l.Pos < l.Length {
+		char := l.Input[l.Pos]
+		if char == ' ' || char == '\t' || char == '\n' || char == '\r' {
+			l.Pos++
+		} else {
+			break
+		}
 	}
 }
 
 // NextToken returns the next token from the input
 func (l *Lexer) NextToken() Token {
 	l.SkipWhiteSpaces()
-	char := l.Next()
+
+	if l.Pos >= l.Length {
+		return Token{EOF, ""}
+	}
+
+	char := l.Input[l.Pos]
+	l.Pos++
 
 	switch char {
-	case 0:
-		return Token{EOF, ""}
 	case '{':
 		return Token{LBrace, "{"}
 	case '}':
@@ -60,78 +72,118 @@ func (l *Lexer) NextToken() Token {
 		return Token{Comma, ","}
 	case '"':
 		return l.parseString()
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		l.Pos-- // Back up to include the digit/minus in parseNumber
+		return l.parseNumber()
+	case 't':
+		return l.parseKeyword("true", True)
+	case 'f':
+		return l.parseKeyword("false", False)
+	case 'n':
+		return l.parseKeyword("null", Null)
 	default:
-		if unicode.IsDigit(char) || char == '-' {
-			return l.parseNumber()
-		}
-		return l.parseKeyword()
+		return Token{Invalid, string(char)}
 	}
 }
 
-// parseString parses a JSON string token
+// parseString optimized to avoid string building
 func (l *Lexer) parseString() Token {
 	startPos := l.Pos
-	for {
-		char := l.Next()
+
+	for l.Pos < l.Length {
+		char := l.Input[l.Pos]
+		l.Pos++
+
 		if char == '"' {
-			break
+			return Token{String, l.Input[startPos : l.Pos-1]}
 		}
-		if char == 0 {
-			return Token{Invalid, "Unterminated string"}
-		}
-		// Handle escape sequences
-		if char == '\\' {
-			l.Next() // Skip the escaped character
+		if char == '\\' && l.Pos < l.Length {
+			l.Pos++ // Skip escaped character
 		}
 	}
-	return Token{String, string(l.Input[startPos : l.Pos-1])}
+
+	return Token{Invalid, "Unterminated string"}
 }
 
-// parseNumber parses a JSON number token
+// parseNumber optimized for better performance
 func (l *Lexer) parseNumber() Token {
-	startPos := l.Pos - 1
-	dotSeen := false
-	expSeen := false
+	startPos := l.Pos
 
-	for {
-		c := l.Peek()
-		if unicode.IsDigit(c) {
-			l.Next()
-		} else if c == '.' && !dotSeen && !expSeen {
-			dotSeen = true
-			l.Next()
-		} else if (c == 'e' || c == 'E') && !expSeen {
-			expSeen = true
-			l.Next()
-			// Handle optional sign after exponent
-			if l.Peek() == '+' || l.Peek() == '-' {
-				l.Next()
-			}
-		} else {
-			break
+	// Handle optional minus
+	if l.Pos < l.Length && l.Input[l.Pos] == '-' {
+		l.Pos++
+	}
+
+	// Parse digits
+	if l.Pos >= l.Length || !isDigit(l.Input[l.Pos]) {
+		return Token{Invalid, "Invalid number"}
+	}
+
+	// Handle zero or other digits
+	if l.Input[l.Pos] == '0' {
+		l.Pos++
+	} else {
+		for l.Pos < l.Length && isDigit(l.Input[l.Pos]) {
+			l.Pos++
 		}
 	}
 
-	return Token{Number, string(l.Input[startPos:l.Pos])}
+	// Handle decimal part
+	if l.Pos < l.Length && l.Input[l.Pos] == '.' {
+		l.Pos++
+		if l.Pos >= l.Length || !isDigit(l.Input[l.Pos]) {
+			return Token{Invalid, "Invalid number"}
+		}
+		for l.Pos < l.Length && isDigit(l.Input[l.Pos]) {
+			l.Pos++
+		}
+	}
+
+	// Handle exponent
+	if l.Pos < l.Length && (l.Input[l.Pos] == 'e' || l.Input[l.Pos] == 'E') {
+		l.Pos++
+		if l.Pos < l.Length && (l.Input[l.Pos] == '+' || l.Input[l.Pos] == '-') {
+			l.Pos++
+		}
+		if l.Pos >= l.Length || !isDigit(l.Input[l.Pos]) {
+			return Token{Invalid, "Invalid number"}
+		}
+		for l.Pos < l.Length && isDigit(l.Input[l.Pos]) {
+			l.Pos++
+		}
+	}
+
+	return Token{Number, l.Input[startPos:l.Pos]}
 }
 
-// parseKeyword parses JSON keywords (true, false, null)
-func (l *Lexer) parseKeyword() Token {
-	startPos := l.Pos - 1
-	for unicode.IsLetter(l.Peek()) {
-		l.Next()
+// parseKeyword optimized for specific keywords
+func (l *Lexer) parseKeyword(expected string, tokenType TokenType) Token {
+	startPos := l.Pos - 1 // We already consumed the first character
+
+	if l.Pos+len(expected)-1 > l.Length {
+		return Token{Invalid, "Invalid keyword"}
 	}
 
-	word := string(l.Input[startPos:l.Pos])
-	switch word {
-	case "true":
-		return Token{True, word}
-	case "false":
-		return Token{False, word}
-	case "null":
-		return Token{Null, word}
-	default:
-		// Return an invalid token instead of panicking
-		return Token{Invalid, word}
+	// Check if the remaining characters match
+	for i := 1; i < len(expected); i++ {
+		if l.Input[l.Pos] != expected[i] {
+			// Consume the rest of the invalid token
+			for l.Pos < l.Length && isLetter(l.Input[l.Pos]) {
+				l.Pos++
+			}
+			return Token{Invalid, l.Input[startPos:l.Pos]}
+		}
+		l.Pos++
 	}
+
+	return Token{tokenType, expected}
+}
+
+// Helper functions for better performance
+func isDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
+}
+
+func isLetter(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
